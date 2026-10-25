@@ -10,3 +10,5 @@
 The Montserrat author and 2011–2015 copyright were read from the embedded name
 table of the actual font in this checkout. Its embedded licence identifies OFL 1.1.
 The original demo README is retained at `multiplayer-bomber/project/README.md`.
+
+Full upstream licence notices and terms for Gamira’s changes: [NOTICE.md](NOTICE.md).

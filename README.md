@@ -52,3 +52,9 @@ Patch reconstruction, Godot import and headless startup have been checked.
 Original demo: Godot Engine contributors, MIT. See [CREDITS.md](CREDITS.md) for
 font and other acknowledgements. Preserve upstream licence notices with the
 reconstructed client.
+
+## Licence
+
+Gamira’s client integration changes are licensed under [MIT](LICENSE). Original
+upstream copyright and licence notices are preserved in [NOTICE.md](NOTICE.md)
+and [LICENSES/](LICENSES/). Third-party assets and dependencies retain their own terms.
