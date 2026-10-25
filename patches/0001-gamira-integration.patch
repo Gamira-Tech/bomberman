@@ -1,0 +1,1532 @@
+diff --git a/multiplayer-bomber/.gitignore b/multiplayer-bomber/.gitignore
+new file mode 100644
+index 0000000000000000000000000000000000000000..c5bb7bb12ef42065f2efde1d8adafe01edd258f1
+--- /dev/null
++++ b/multiplayer-bomber/.gitignore
+@@ -0,0 +1,12 @@
++# Godot 4
++.godot/
++*.uid
++
++# Export presets (may contain personal paths)
++export_presets.cfg
++
++# Android
++android/
++
++# macOS
++.DS_Store
+diff --git a/multiplayer-bomber/LICENSE b/multiplayer-bomber/LICENSE
+index 05519693673e35cc80bba699e69af3de1d9886d7..1d4f2ef417814d47707d3fba1ba18673ddaeef16 100644
+--- a/multiplayer-bomber/LICENSE
++++ b/multiplayer-bomber/LICENSE
+@@ -1,21 +1,23 @@
+-Copyright (c) 2014-present Godot Engine contributors. \
++MIT License
++
++Copyright (c) 2014-present Godot Engine contributors.
+ Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
++Copyright (c) 2024 Gamira (integration changes).
+ 
+-Permission is hereby granted, free of charge, to any person obtaining
+-a copy of this software and associated documentation files (the
+-"Software"), to deal in the Software without restriction, including
+-without limitation the rights to use, copy, modify, merge, publish,
+-distribute, sublicense, and/or sell copies of the Software, and to
+-permit persons to whom the Software is furnished to do so, subject to
+-the following conditions:
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
+ 
+-The above copyright notice and this permission notice shall be
+-included in all copies or substantial portions of the Software.
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
+ 
+-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+-IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/multiplayer-bomber/README.md b/multiplayer-bomber/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..aeb5a1a7cd3ad0328a7df5324d94a5b17b0ea7eb
+--- /dev/null
++++ b/multiplayer-bomber/README.md
+@@ -0,0 +1,11 @@
++# Multiplayer Bomber client with Gamira
++
++Edit `project/client.cfg`: `gamira_url` is the Gamira API and `platform_url` is
++the authentication platform base URL (without `/api/v1`). Environment overrides:
++`GAMIRA_API` and `PLATFORM_URL`.
++
++Run `godot --path project/` using Godot 4.6 or later. Sign in, then find a match.
++The configuration contains public URLs only. No admin credentials are needed.
++Game servers and both services are operated separately.
++
++Upstream: https://github.com/godotengine/godot-demo-projects (MIT).
+diff --git a/multiplayer-bomber/project/auth_client.gd b/multiplayer-bomber/project/auth_client.gd
+new file mode 100644
+index 0000000000000000000000000000000000000000..6f81d32c36315bf5265319b74f59da07dbf51ca6
+--- /dev/null
++++ b/multiplayer-bomber/project/auth_client.gd
+@@ -0,0 +1,217 @@
++extends Node
++
++# Device flow client matching authentication-demo/samples/deviceflow/main.go pattern:
++# begin → sleep(interval) → poll → if pending: continue → if authenticated: done
++
++func _log(msg: String) -> void:
++	print("[%s] %s" % [Time.get_datetime_string_from_system(), msg])
++
++# Public authentication URL comes from client.cfg or PLATFORM_URL.
++var AUTH_BASE: String = preload("res://client_config.gd").service_url("platform_url", "PLATFORM_URL") + "/api/v1"
++const PROVIDER := "github"
++var TOKEN_PATH := "user://bomber_auth.json"
++const _STATE_B64 := "eyJhdXRoZW50aWNhdGlvblR5cGUiOiJkZXZpY2VmbG93In0="  # base64({"authenticationType":"deviceflow"})
++
++signal device_flow_started(user_code: String, verification_uri: String, interval: int)
++signal auth_completed(gamira_token: String, display_name: String)
++signal auth_failed(reason: String)
++signal token_refreshed(gamira_token: String)
++
++var _challenge_id := ""
++var _session_cookie := ""
++var _poll_interval := 5
++var _auth_demo_token := ""
++var _gamira_token := ""
++var _display_name := ""
++
++const _ADJECTIVES := ["Brave", "Swift", "Sneaky", "Lucky", "Wild", "Mighty", "Sly", "Bold", "Quick", "Fierce"]
++const _NOUNS := ["Tiger", "Wolf", "Fox", "Hawk", "Bear", "Lion", "Otter", "Raven", "Panda", "Falcon"]
++
++func _generate_random_name() -> String:
++	var a: String = _ADJECTIVES[randi() % _ADJECTIVES.size()]
++	var n: String = _NOUNS[randi() % _NOUNS.size()]
++	return "%s%s%d" % [a, n, randi() % 1000]
++
++# Builds display string. If existing _display_name already targets this email
++# (format "name:::email"), reuse its name part; otherwise generate fresh.
++func _build_display_name(email: String) -> String:
++	if email == "":
++		return ""
++	var existing := _display_name
++	var sep := existing.find(":::")
++	if sep != -1 and existing.substr(sep + 3) == email:
++		return existing
++	return "%s:::%s" % [_generate_random_name(), email]
++
++# One-shot timer: restarted from poll response so there is never a concurrent request.
++# This mirrors the sample's time.Sleep(interval) → poll → loop.
++var _poll_timer: Timer
++
++func _ready() -> void:
++	for arg in OS.get_cmdline_user_args():
++		if arg.begins_with("--player-slot="):
++			TOKEN_PATH = "user://bomber_auth_%s.json" % arg.substr("--player-slot=".length())
++			break
++	_poll_timer = Timer.new()
++	_poll_timer.one_shot = true
++	_poll_timer.timeout.connect(_do_poll)
++	add_child(_poll_timer)
++
++func begin_device_flow() -> void:
++	_poll_timer.stop()
++	_challenge_id = ""
++	_session_cookie = ""
++	_poll_interval = 5
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_begin_completed.bind(http))
++	http.request(AUTH_BASE + "/auth-deviceflow/" + PROVIDER, ["x-state: " + _STATE_B64])
++
++func _on_begin_completed(result: int, code: int, headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
++		_log("begin failed code=%d body=%s" % [code, body.get_string_from_utf8()])
++		auth_failed.emit("Failed to start device flow (HTTP %d)" % code)
++		return
++	for h in headers:
++		if h.to_lower().begins_with("set-cookie:"):
++			_session_cookie = h.substr(11).strip_edges().split(";")[0].strip_edges()
++			break
++	var data: Dictionary = JSON.parse_string(body.get_string_from_utf8())
++	if not data:
++		auth_failed.emit("Invalid begin response")
++		return
++	_challenge_id = data.get("challenge_id", "")
++	_poll_interval = max(int(data.get("interval", 5)), 5)
++	var user_code: String = data.get("user_code", "")
++	var verification_uri: String = data.get("verification_uri", "")
++	_log("Challenge: %s" % _challenge_id)
++	_log("Provider:  %s" % data.get("provider", ""))
++	_log("Type:      %s" % data.get("type", ""))
++	_log("Open:")
++	_log(verification_uri)
++	_log("Enter code:")
++	_log(user_code)
++	device_flow_started.emit(user_code, verification_uri, _poll_interval)
++	# sleep(interval) before first poll — same as sample
++	_poll_timer.start(_poll_interval)
++
++func _do_poll() -> void:
++	var hdrs := PackedStringArray(["x-challenge-id: " + _challenge_id, "x-state: " + _STATE_B64])
++	if _session_cookie != "":
++		hdrs.append("Cookie: " + _session_cookie)
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_poll_completed.bind(http))
++	http.request(AUTH_BASE + "/auth-deviceflow/" + PROVIDER + "/callback", hdrs)
++
++func _on_poll_completed(result: int, code: int, headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	# refresh cookie from response (auth-demo updates session state each poll)
++	for h in headers:
++		if h.to_lower().begins_with("set-cookie:"):
++			_session_cookie = h.substr(11).strip_edges().split(";")[0].strip_edges()
++			break
++	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
++		_log("poll error result=%d code=%d" % [result, code])
++		_poll_timer.start(_poll_interval)
++		return
++	var data: Dictionary = JSON.parse_string(body.get_string_from_utf8())
++	if not data:
++		_poll_timer.start(_poll_interval)
++		return
++	# Mirror sample: check Pending first, then Authenticated.
++	# Default false — matches Go's zero value for missing omitempty bool fields.
++	if data.get("pending", false):
++		_log("pending: %s" % data.get("message", ""))
++		_poll_timer.start(_poll_interval)
++		return
++	if data.get("authenticated", false):
++		_log("authenticated")
++		_auth_demo_token = data.get("token", "")
++		_display_name = _build_display_name(_extract_email(_auth_demo_token))
++		_save_tokens()
++		auth_completed.emit(_auth_demo_token, _display_name)
++
++func cancel_device_flow() -> void:
++	_poll_timer.stop()
++	_challenge_id = ""
++
++# bridges auth-demo JWT (email claim) → gamira x-token (sub+name claims)
++func _make_gamira_token(auth_demo_jwt: String) -> String:
++	var email := _extract_email(auth_demo_jwt)
++	if email == "":
++		return ""
++	var payload := '{"sub":"%s","name":"%s"}' % [email, email]
++	var b64 := Marshalls.utf8_to_base64(payload).replace("+", "-").replace("/", "_").rstrip("=")
++	return "e30." + b64 + ".bridge"
++
++func _extract_email(jwt: String) -> String:
++	var parts := jwt.split(".")
++	if parts.size() != 3:
++		return ""
++	var b64 := parts[1].replace("-", "+").replace("_", "/")
++	while b64.length() % 4 != 0:
++		b64 += "="
++	var payload: Dictionary = JSON.parse_string(Marshalls.base64_to_utf8(b64))
++	if not payload:
++		return ""
++	return payload.get("email", "")
++
++func refresh_token() -> void:
++	if _auth_demo_token == "":
++		auth_failed.emit("No stored token to refresh")
++		return
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_refresh_completed.bind(http))
++	http.request(AUTH_BASE + "/auth/refresh-token", ["x-token: " + _auth_demo_token])
++
++func _on_refresh_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
++		auth_failed.emit("Token refresh failed")
++		return
++	_auth_demo_token = body.get_string_from_utf8().strip_edges().trim_prefix('"').trim_suffix('"')
++	_gamira_token = _make_gamira_token(_auth_demo_token)
++	if _gamira_token == "":
++		auth_failed.emit("Refreshed token malformed")
++		return
++	_display_name = _build_display_name(_extract_email(_auth_demo_token))
++	_save_tokens()
++	token_refreshed.emit(_gamira_token)
++
++func get_gamira_token() -> String:
++	return _auth_demo_token
++
++func get_display_name() -> String:
++	return _display_name
++
++func load_stored_tokens() -> bool:
++	if not FileAccess.file_exists(TOKEN_PATH):
++		return false
++	var f := FileAccess.open(TOKEN_PATH, FileAccess.READ)
++	if not f:
++		return false
++	var data: Dictionary = JSON.parse_string(f.get_as_text())
++	if not data:
++		return false
++	_auth_demo_token = data.get("auth_demo_token", "")
++	_display_name = data.get("display_name", "")
++	return _auth_demo_token != ""
++
++func _save_tokens() -> void:
++	var f := FileAccess.open(TOKEN_PATH, FileAccess.WRITE)
++	if not f:
++		return
++	f.store_string(JSON.stringify({
++		"auth_demo_token": _auth_demo_token,
++		"display_name": _display_name,
++	}))
++
++func clear_stored_tokens() -> void:
++	_auth_demo_token = ""
++	_gamira_token = ""
++	_display_name = ""
++	if FileAccess.file_exists(TOKEN_PATH):
++		DirAccess.remove_absolute(TOKEN_PATH)
+diff --git a/multiplayer-bomber/project/bomb.gd b/multiplayer-bomber/project/bomb.gd
+index 04dfd0864a39cfe4b47615e712f2322f8c71886c..078589f0fc3df457c6d0f131a494249e70544396 100644
+--- a/multiplayer-bomber/project/bomb.gd
++++ b/multiplayer-bomber/project/bomb.gd
+@@ -3,27 +3,37 @@ extends Area2D
+ var in_area: Array = []
+ var from_player: int
+ 
+-# Called from the animation.
++func _ready() -> void:
++	# Godot 4.4 doesn't load AnimationLibrary from format=3 tscn at runtime.
++	# Drive the bomb sequence with timers instead.
++	$Sprite.self_modulate = Color(1, 1, 1, 1)
++	get_tree().create_timer(2.8).timeout.connect(_on_explode_time)
++	get_tree().create_timer(3.4).timeout.connect(done)
++
++
++func _on_explode_time() -> void:
++	$Explosion1.emitting = true
++	$Explosion2.emitting = true
++	$Sprite.visible = false
++	explode()
++
++
+ func explode() -> void:
+ 	if not is_multiplayer_authority():
+-		# Explode only on authority.
+ 		return
+ 
+ 	for p: Object in in_area:
+ 		if p.has_method(&"exploded"):
+-			# Checks if there is wall in between bomb and the object.
+ 			var world_state: PhysicsDirectSpaceState2D = get_world_2d().direct_space_state
+ 			var query := PhysicsRayQueryParameters2D.create(position, p.position)
+ 			query.hit_from_inside = true
+-			var result: Dictionary  = world_state.intersect_ray(query)
++			var result: Dictionary = world_state.intersect_ray(query)
+ 			if result.collider is not TileMap:
+-				# Exploded can only be called by the authority, but will also be called locally.
+ 				p.exploded.rpc(from_player)
+ 
+ 
+ func done() -> void:
+-	if is_multiplayer_authority():
+-		queue_free()
++	queue_free()
+ 
+ 
+ func _on_bomb_body_enter(body: Node2D) -> void:
+diff --git a/multiplayer-bomber/project/brickfloor.png.import b/multiplayer-bomber/project/brickfloor.png.import
+index 787890fa28d26d4958ede7cdfee43d08edab6ab3..d0b076d8d890e9a5c5e8fd33509e450ce53e001d 100644
+--- a/multiplayer-bomber/project/brickfloor.png.import
++++ b/multiplayer-bomber/project/brickfloor.png.import
+@@ -18,8 +18,6 @@ dest_files=["res://.godot/imported/brickfloor.png-bab1cbace80ab627972eea565951db
+ compress/mode=0
+ compress/high_quality=false
+ compress/lossy_quality=0.7
+-compress/uastc_level=0
+-compress/rdo_quality_loss=0.0
+ compress/hdr_compression=1
+ compress/normal_map=0
+ compress/channel_pack=0
+@@ -27,10 +25,6 @@ mipmaps/generate=false
+ mipmaps/limit=-1
+ roughness/mode=0
+ roughness/src_normal=""
+-process/channel_remap/red=0
+-process/channel_remap/green=1
+-process/channel_remap/blue=2
+-process/channel_remap/alpha=3
+ process/fix_alpha_border=true
+ process/premult_alpha=false
+ process/normal_map_invert_y=false
+diff --git a/multiplayer-bomber/project/charwalk.png.import b/multiplayer-bomber/project/charwalk.png.import
+index bb7735a0f1ee440110c01a9a82af9140a1ea2d39..02d93b99c4c64c498c8ba552b7198f97c217961e 100644
+--- a/multiplayer-bomber/project/charwalk.png.import
++++ b/multiplayer-bomber/project/charwalk.png.import
+@@ -18,8 +18,6 @@ dest_files=["res://.godot/imported/charwalk.png-a9f067962a6454cc2f52a6e82832cbc5
+ compress/mode=0
+ compress/high_quality=false
+ compress/lossy_quality=0.7
+-compress/uastc_level=0
+-compress/rdo_quality_loss=0.0
+ compress/hdr_compression=1
+ compress/normal_map=0
+ compress/channel_pack=0
+@@ -27,10 +25,6 @@ mipmaps/generate=false
+ mipmaps/limit=-1
+ roughness/mode=0
+ roughness/src_normal=""
+-process/channel_remap/red=0
+-process/channel_remap/green=1
+-process/channel_remap/blue=2
+-process/channel_remap/alpha=3
+ process/fix_alpha_border=true
+ process/premult_alpha=false
+ process/normal_map_invert_y=false
+diff --git a/multiplayer-bomber/project/client.cfg b/multiplayer-bomber/project/client.cfg
+new file mode 100644
+index 0000000000000000000000000000000000000000..385e5197c5c6b3564c29b1744f88024cf177489d
+--- /dev/null
++++ b/multiplayer-bomber/project/client.cfg
+@@ -0,0 +1,4 @@
++# Public URLs only; no credentials or admin secrets.
++[services]
++gamira_url="http://localhost:30080"
++platform_url="http://localhost:30090"
+diff --git a/multiplayer-bomber/project/client_config.gd b/multiplayer-bomber/project/client_config.gd
+new file mode 100644
+index 0000000000000000000000000000000000000000..a26e5dd2b34b365c88188f14c90eae70724822c2
+--- /dev/null
++++ b/multiplayer-bomber/project/client_config.gd
+@@ -0,0 +1,11 @@
++extends RefCounted
++
++static func service_url(key: String, environment: String) -> String:
++	var value := OS.get_environment(environment)
++	if value == "":
++		var config := ConfigFile.new()
++		if config.load("res://client.cfg") == OK:
++			value = str(config.get_value("services", key, ""))
++	if value == "":
++		value = "http://localhost:30080" if key == "gamira_url" else "http://localhost:30090"
++	return value.trim_suffix("/")
+diff --git a/multiplayer-bomber/project/explosion.png.import b/multiplayer-bomber/project/explosion.png.import
+index 1440c16a2b411f39e3954e3b14fc48b80c8d0b41..ba4bbf6132545e86d6c1ec8b6c1c781ec75e0b5b 100644
+--- a/multiplayer-bomber/project/explosion.png.import
++++ b/multiplayer-bomber/project/explosion.png.import
+@@ -18,8 +18,6 @@ dest_files=["res://.godot/imported/explosion.png-730076d88b39dbfd5c22ad71f1135b0
+ compress/mode=0
+ compress/high_quality=false
+ compress/lossy_quality=0.7
+-compress/uastc_level=0
+-compress/rdo_quality_loss=0.0
+ compress/hdr_compression=1
+ compress/normal_map=0
+ compress/channel_pack=0
+@@ -27,10 +25,6 @@ mipmaps/generate=false
+ mipmaps/limit=-1
+ roughness/mode=0
+ roughness/src_normal=""
+-process/channel_remap/red=0
+-process/channel_remap/green=1
+-process/channel_remap/blue=2
+-process/channel_remap/alpha=3
+ process/fix_alpha_border=true
+ process/premult_alpha=false
+ process/normal_map_invert_y=false
+diff --git a/multiplayer-bomber/project/gamestate.gd b/multiplayer-bomber/project/gamestate.gd
+index b1143b9f4db0fbc2634051a56b6f15942837ea6e..b8887a9add4260f392d607bf08344f669906e86d 100644
+--- a/multiplayer-bomber/project/gamestate.gd
++++ b/multiplayer-bomber/project/gamestate.gd
+@@ -26,7 +26,7 @@ signal game_error(what: int)
+ 
+ # Callback from SceneTree.
+ func _player_connected(id: int) -> void:
+-	# Registration of a client beings here, tell the connected player that we are here.
++	print("[gs] peer_connected id=", id, " is_server=", multiplayer.is_server())
+ 	register_player.rpc_id(id, player_name)
+ 
+ 
+@@ -65,9 +65,15 @@ func _connected_fail() -> void:
+ @rpc("any_peer")
+ func register_player(new_player_name: String) -> void:
+ 	var id := multiplayer.get_remote_sender_id()
++	print("[gs] register_player sender=", id, " name=", new_player_name, " is_server=", multiplayer.is_server())
+ 	players[id] = new_player_name
+ 	player_list_changed.emit()
+ 
++@rpc
++func announce_player(p_id: int, p_name: String) -> void:
++	players[p_id] = p_name
++	player_list_changed.emit()
++
+ 
+ func unregister_player(id: int) -> void:
+ 	players.erase(id)
+@@ -81,7 +87,6 @@ func load_world() -> void:
+ 	get_tree().get_root().add_child(world)
+ 	get_tree().get_root().get_node(^"Lobby").hide()
+ 
+-	# Set up score.
+ 	world.get_node(^"Score").add_player(multiplayer.get_unique_id(), player_name)
+ 	for pn: int in players:
+ 		world.get_node(^"Score").add_player(pn, players[pn])
+@@ -90,17 +95,17 @@ func load_world() -> void:
+ 	get_tree().paused = false
+ 
+ 
+-func host_game(new_player_name: String) -> void:
++func join_game(ip: String, new_player_name: String) -> void:
+ 	player_name = new_player_name
+ 	peer = ENetMultiplayerPeer.new()
+-	peer.create_server(DEFAULT_PORT, MAX_PEERS)
++	peer.create_client(ip, DEFAULT_PORT)
+ 	multiplayer.set_multiplayer_peer(peer)
+ 
+-
+-func join_game(ip: String, new_player_name: String) -> void:
++# Connect to the game-server address returned by Gamira.
++func join_game_port(ip: String, port: int, new_player_name: String) -> void:
+ 	player_name = new_player_name
+ 	peer = ENetMultiplayerPeer.new()
+-	peer.create_client(ip, DEFAULT_PORT)
++	peer.create_client(ip, port)
+ 	multiplayer.set_multiplayer_peer(peer)
+ 
+ 
+@@ -108,30 +113,28 @@ func get_player_list() -> Array:
+ 	return players.values()
+ 
+ 
+-func begin_game() -> void:
+-	assert(multiplayer.is_server())
+-	load_world.rpc()
++@rpc("call_local")
++func _spawn_bomb_rpc(spawn_pos: Vector2, player_id: int) -> void:
++	print("[gs] _spawn_bomb_rpc peer=", multiplayer.get_unique_id(), " pos=", spawn_pos, " player_id=", player_id)
++	var world_node: Node = get_tree().get_root().get_node_or_null(^"World")
++	if world_node == null:
++		print("[gs] _spawn_bomb_rpc ERROR: World node not found!")
++		return
++	var bomb: Node = (load("res://bomb.tscn") as PackedScene).instantiate()
++	bomb.position = spawn_pos
++	bomb.set("from_player", player_id)
++	world_node.add_child(bomb)
++	print("[gs] _spawn_bomb_rpc bomb added name=", bomb.name, " children_count=", world_node.get_child_count())
+ 
++
++@rpc("call_local")
++func _spawn_player(p_id: int, spawn_pos: Vector2, p_name: String) -> void:
+ 	var world: Node2D = get_tree().get_root().get_node(^"World")
+-	var player_scene: PackedScene = load("res://player.tscn")
+-
+-	# Create a dictionary with peer ID. and respective spawn points.
+-	# TODO: This could be improved by randomizing spawn points for players.
+-	var spawn_points := {}
+-	spawn_points[1] = 0  # Server in spawn point 0.
+-	var spawn_point_idx := 1
+-	for p: int in players:
+-		spawn_points[p] = spawn_point_idx
+-		spawn_point_idx += 1
+-
+-	for p_id: int in spawn_points:
+-		var spawn_pos: Vector2 = world.get_node("SpawnPoints/" + str(spawn_points[p_id])).position
+-		var player := player_scene.instantiate()
+-		player.synced_position = spawn_pos
+-		player.name = str(p_id)
+-		world.get_node(^"Players").add_child(player)
+-		# The RPC must be called after the player is added to the scene tree.
+-		player.set_player_name.rpc(player_name if p_id == multiplayer.get_unique_id() else players[p_id])
++	var player: Node = (load("res://player.tscn") as PackedScene).instantiate()
++	player.set("synced_position", spawn_pos)
++	player.name = str(p_id)
++	world.get_node(^"Players").add_child(player)
++	player.set_player_name(p_name)
+ 
+ 
+ func end_game() -> void:
+diff --git a/multiplayer-bomber/project/gamira_client.gd b/multiplayer-bomber/project/gamira_client.gd
+new file mode 100644
+index 0000000000000000000000000000000000000000..67690e8101ee1eb57b57a4d87e8e6235bb68e159
+--- /dev/null
++++ b/multiplayer-bomber/project/gamira_client.gd
+@@ -0,0 +1,162 @@
++extends Node
++
++var GAMIRA_BASE: String = preload("res://client_config.gd").service_url("gamira_url", "GAMIRA_API")
++const GAME_MODE_ID := "gm_bomber"
++const POLL_INTERVAL := 2.0
++
++signal ticket_created(ticket_id: String)
++signal match_found(connection: Dictionary)
++signal ticket_cancelled()
++signal error_occurred(reason: String)
++
++var _ticket_id := ""
++var _gamira_token := ""
++var _session_id := ""
++var _poll_timer: Timer
++
++# region_id -> public API base URL, harvested from GET /regions. In a
++# multi-location deployment each region runs its own cluster behind its own
++# hostname and only that cluster can act on the region's tickets. An empty
++# api_endpoint (the single-location default) leaves this map empty and every
++# call keeps using GAMIRA_BASE.
++var _region_endpoints := {}
++# Region that owns the live ticket; set from the create response.
++var _ticket_region := ""
++
++# _base_for returns the API base that owns region_id, falling back to the
++# configured one when the region has no endpoint of its own.
++func _base_for(region_id: String) -> String:
++	if region_id != "" and _region_endpoints.has(region_id):
++		return _region_endpoints[region_id]
++	return GAMIRA_BASE
++
++func _log(msg: String) -> void:
++	print("[%s] %s" % [Time.get_datetime_string_from_system(), msg])
++
++func _ready() -> void:
++	_poll_timer = Timer.new()
++	_poll_timer.one_shot = false
++	_poll_timer.wait_time = POLL_INTERVAL
++	_poll_timer.timeout.connect(_poll_ticket)
++	add_child(_poll_timer)
++
++func create_ticket(gamira_token: String) -> void:
++	_gamira_token = gamira_token
++	_ticket_id = ""
++	_log("fetching regions for ping_latencies...")
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_regions_completed.bind(http))
++	http.request(GAMIRA_BASE + "/regions", ["x-token: " + _gamira_token])
++
++func _on_regions_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	var ping_latencies := {}
++	if result == HTTPRequest.RESULT_SUCCESS and code == 200:
++		var data: Dictionary = JSON.parse_string(body.get_string_from_utf8())
++		if data and data.has("items"):
++			for region in data["items"]:
++				var rid: String = region.get("region_id", "")
++				ping_latencies[rid] = 20
++				var ep: String = region.get("api_endpoint", "")
++				if ep != "":
++					_region_endpoints[rid] = ep
++	if ping_latencies.is_empty():
++		ping_latencies = {"eu-west": 20}  # fallback
++	_log("creating ticket game_mode=%s ping_latencies=%s" % [GAME_MODE_ID, JSON.stringify(ping_latencies)])
++	var http2 := HTTPRequest.new()
++	add_child(http2)
++	http2.request_completed.connect(_on_create_completed.bind(http2))
++	var body_str := JSON.stringify({"game_mode_id": GAME_MODE_ID, "ping_latencies": ping_latencies})
++	http2.request(GAMIRA_BASE + "/matchmaking/tickets",
++		["Content-Type: application/json", "x-token: " + _gamira_token],
++		HTTPClient.METHOD_POST, body_str)
++
++func _on_create_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	var body_str := body.get_string_from_utf8()
++	_log("create ticket result=%d code=%d body=%s" % [result, code, body_str])
++	if result != HTTPRequest.RESULT_SUCCESS or (code != 200 and code != 201):
++		error_occurred.emit("Failed to create ticket (HTTP %d)" % code)
++		return
++	var created: Dictionary = JSON.parse_string(body_str)
++	if created:
++		# Remember which region owns the ticket so polls and cancels go to the
++		# cluster that can actually see it.
++		_ticket_region = created.get("region_id", "")
++	var data: Dictionary = JSON.parse_string(body_str)
++	if not data:
++		error_occurred.emit("Invalid ticket response")
++		return
++	_ticket_id = data.get("ticket_id", "")
++	if _ticket_id == "":
++		error_occurred.emit("Ticket ID missing in response")
++		return
++	_log("ticket created id=%s" % _ticket_id)
++	ticket_created.emit(_ticket_id)
++	_poll_timer.start()
++
++func _poll_ticket() -> void:
++	if _ticket_id == "":
++		return
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_poll_completed.bind(http))
++	http.request(_base_for(_ticket_region) + "/matchmaking/tickets/" + _ticket_id,
++		["x-token: " + _gamira_token])
++
++func _on_poll_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	var body_str := body.get_string_from_utf8()
++	_log("poll ticket result=%d code=%d body=%s" % [result, code, body_str])
++	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
++		return
++	var data: Dictionary = JSON.parse_string(body_str)
++	if not data:
++		return
++	var status: String = data.get("status", "")
++	match status:
++		"matched":
++			var conn: Dictionary = data.get("connection", {})
++			# Kept for the optional ICE tunnel, which has to name the session it is
++			# negotiating for. The match_found signature is unchanged so nothing
++			# else has to care.
++			_session_id = data.get("session_id", "")
++			_log("match found: %s" % JSON.stringify(conn))
++			_poll_timer.stop()
++			match_found.emit(conn)
++		"cancelled":
++			_poll_timer.stop()
++			_ticket_id = ""
++			ticket_cancelled.emit()
++
++func cancel_ticket() -> void:
++	_poll_timer.stop()
++	if _ticket_id == "":
++		ticket_cancelled.emit()
++		return
++	var http := HTTPRequest.new()
++	add_child(http)
++	http.request_completed.connect(_on_cancel_completed.bind(http))
++	http.request(_base_for(_ticket_region) + "/matchmaking/tickets/" + _ticket_id,
++		["x-token: " + _gamira_token],
++		HTTPClient.METHOD_DELETE)
++
++func _on_cancel_completed(_result: int, _code: int, _headers: PackedStringArray, _body: PackedByteArray, http: HTTPRequest) -> void:
++	http.queue_free()
++	_ticket_id = ""
++	ticket_cancelled.emit()
++
++
++# ---- Accessors used by the optional ICE tunnel (see ice_tunnel.gd) ----
++
++func get_session_id() -> String:
++	return _session_id
++
++
++func get_gamira_token() -> String:
++	return _gamira_token
++
++
++func get_api_base() -> String:
++	return _base_for(_ticket_region)
+diff --git a/multiplayer-bomber/project/ice_tunnel.gd b/multiplayer-bomber/project/ice_tunnel.gd
+new file mode 100644
+index 0000000000000000000000000000000000000000..51bd4b3e912fcef6545910d198274017260bd6c1
+--- /dev/null
++++ b/multiplayer-bomber/project/ice_tunnel.gd
+@@ -0,0 +1,94 @@
++extends Node
++## Optional NAT-traversal tunnel for the game connection.
++##
++## Off unless GAMIRA_ICE_ENABLED is set AND the matched session advertises
++## ice_servers. With it off, nothing here runs and the client connects to the game
++## server exactly as it always has — the direct path stays the default.
++##
++## When on, this spawns gamira's ice-proxy (a small Go binary; the launcher builds
++## it and passes its path in GAMIRA_ICE_PROXY_BIN), which negotiates a WebRTC
++## tunnel to the sidecar next to the game server and presents a local UDP port.
++## ENet then dials that local port instead of the remote address, so the rest of
++## the game is unaware a tunnel exists.
++##
++## The proxy is spawned by the game rather than by the launcher because the offer
++## must be made with THIS player's token: gamira only lets a session's own members
++## negotiate a tunnel to it, and the launcher has no player token.
++
++var _pid := -1
++var _ready_path := ""
++
++## Returns true when the launcher enabled ICE and this session can use it.
++func is_available(connection: Dictionary) -> bool:
++	if OS.get_environment("GAMIRA_ICE_ENABLED") == "":
++		return false
++	if OS.get_environment("GAMIRA_ICE_PROXY_BIN") == "":
++		return false
++	var servers: Array = connection.get("ice_servers", [])
++	return not servers.is_empty()
++
++
++## Negotiates a tunnel and returns {"ip": String, "port": int} for ENet to dial,
++## or an empty Dictionary when it could not be established.
++##
++## An empty result is not fatal: the caller falls back to the direct address. A
++## relay is a fallback path, so failing to build one must not stop a player who
++## could have connected directly anyway.
++func open(session_id: String, token: String, api_base: String, timeout_seconds := 25.0) -> Dictionary:
++	var bin := OS.get_environment("GAMIRA_ICE_PROXY_BIN")
++	if session_id == "" or token == "":
++		push_warning("ice: no session/token; connecting directly")
++		return {}
++
++	# The proxy writes its chosen address here once the tunnel is up, so its
++	# existence is the "safe to dial" signal and its contents are the address.
++	# Letting the proxy pick the port (:0) avoids guessing a free one.
++	_ready_path = ProjectSettings.globalize_path("user://gamira_ice_%d.addr" % OS.get_process_id())
++	if FileAccess.file_exists(_ready_path):
++		DirAccess.remove_absolute(_ready_path)
++
++	var args := PackedStringArray([
++		"--role=client",
++		"--api", api_base,
++		"--session", session_id,
++		"--token", token,
++		"--local", "127.0.0.1:0",
++		"--ready-file", _ready_path,
++	])
++	_pid = OS.create_process(bin, args)
++	if _pid <= 0:
++		push_warning("ice: could not start %s; connecting directly" % bin)
++		return {}
++
++	var waited := 0.0
++	while waited < timeout_seconds:
++		if FileAccess.file_exists(_ready_path):
++			var addr := FileAccess.get_file_as_string(_ready_path).strip_edges()
++			var parts := addr.rsplit(":", true, 1)
++			if parts.size() == 2 and parts[1].is_valid_int():
++				print("ice: tunnel up, dialling %s" % addr)
++				return {"ip": parts[0], "port": int(parts[1])}
++			push_warning("ice: unreadable address %s; connecting directly" % addr)
++			close()
++			return {}
++		await get_tree().create_timer(0.2).timeout
++		waited += 0.2
++
++	push_warning("ice: tunnel not ready after %.0fs; connecting directly" % timeout_seconds)
++	close()
++	return {}
++
++
++## Stops the proxy. Safe to call when nothing was started, and called on match end
++## as well as on failure — the tunnel lives exactly as long as the connection.
++func close() -> void:
++	if _pid > 0:
++		OS.kill(_pid)
++		_pid = -1
++	if _ready_path != "" and FileAccess.file_exists(_ready_path):
++		DirAccess.remove_absolute(_ready_path)
++	_ready_path = ""
++
++
++func _exit_tree() -> void:
++	close()
+diff --git a/multiplayer-bomber/project/icon.webp.import b/multiplayer-bomber/project/icon.webp.import
+index 2d7900bc362d47b93663bf514ed55e4b4916e811..a37681252c7a2381cc5d135393aeacb262a36f93 100644
+--- a/multiplayer-bomber/project/icon.webp.import
++++ b/multiplayer-bomber/project/icon.webp.import
+@@ -18,8 +18,6 @@ dest_files=["res://.godot/imported/icon.webp-e94f9a68b0f625a567a797079e4d325f.ct
+ compress/mode=0
+ compress/high_quality=false
+ compress/lossy_quality=0.7
+-compress/uastc_level=0
+-compress/rdo_quality_loss=0.0
+ compress/hdr_compression=1
+ compress/normal_map=0
+ compress/channel_pack=0
+@@ -27,10 +25,6 @@ mipmaps/generate=false
+ mipmaps/limit=-1
+ roughness/mode=0
+ roughness/src_normal=""
+-process/channel_remap/red=0
+-process/channel_remap/green=1
+-process/channel_remap/blue=2
+-process/channel_remap/alpha=3
+ process/fix_alpha_border=true
+ process/premult_alpha=false
+ process/normal_map_invert_y=false
+diff --git a/multiplayer-bomber/project/lobby.gd b/multiplayer-bomber/project/lobby.gd
+index a31c94f8ee6bd83ed599a6d3d796b5af15441dd3..d03a01c9787eb23c48c30b660ab781b302ec30b0 100644
+--- a/multiplayer-bomber/project/lobby.gd
++++ b/multiplayer-bomber/project/lobby.gd
+@@ -1,94 +1,156 @@
+ extends Control
+ 
+-func _ready() -> void:
+-	# Called every time the node is added to the scene.
+-	gamestate.connection_failed.connect(_on_connection_failed)
+-	gamestate.connection_succeeded.connect(_on_connection_success)
+-	gamestate.player_list_changed.connect(refresh_lobby)
+-	gamestate.game_ended.connect(_on_game_ended)
+-	gamestate.game_error.connect(_on_game_error)
+-	# Set the player name according to the system username. Fallback to the path.
+-	if OS.has_environment("USERNAME"):
+-		$Connect/Name.text = OS.get_environment("USERNAME")
+-	else:
+-		var desktop_path := OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP).replace("\\", "/").split("/")
+-		$Connect/Name.text = desktop_path[desktop_path.size() - 2]
+-
++# State machine: login → auth_pending → lobby → matchmaking → (game starts)
+ 
+-func _on_host_pressed() -> void:
+-	if $Connect/Name.text == "":
+-		$Connect/ErrorLabel.text = "Invalid name!"
+-		return
++enum State { LOGIN, AUTH_PENDING, LOBBY, MATCHMAKING }
++var _state := State.LOGIN
+ 
+-	$Connect.hide()
+-	$Players.show()
+-	$Connect/ErrorLabel.text = ""
++# Optional NAT-traversal tunnel. Inert unless the launcher enabled it — see
++# ice_tunnel.gd.
++var _ice: Node = null
+ 
+-	var player_name: String = $Connect/Name.text
+-	gamestate.host_game(player_name)
+-	get_window().title = ProjectSettings.get_setting("application/config/name") + ": Server (%s)" % $Connect/Name.text
+-	refresh_lobby()
+-
+-
+-func _on_join_pressed() -> void:
+-	if $Connect/Name.text == "":
+-		$Connect/ErrorLabel.text = "Invalid name!"
+-		return
+-
+-	var ip: String = $Connect/IPAddress.text
+-	if not ip.is_valid_ip_address():
+-		$Connect/ErrorLabel.text = "Invalid IP address!"
+-		return
+-
+-	$Connect/ErrorLabel.text = ""
+-	$Connect/Host.disabled = true
+-	$Connect/Join.disabled = true
++func _ready() -> void:
++	_ice = preload("res://ice_tunnel.gd").new()
++	add_child(_ice)
+ 
+-	var player_name: String = $Connect/Name.text
+-	gamestate.join_game(ip, player_name)
+-	get_window().title = ProjectSettings.get_setting("application/config/name") + ": Client (%s)" % $Connect/Name.text
++	gamestate.connection_failed.connect(_on_connection_failed)
++	gamestate.connection_succeeded.connect(_on_connection_succeeded)
++	gamestate.game_ended.connect(_on_game_ended)
++	gamestate.game_error.connect(_on_game_error)
+ 
++	auth_client.device_flow_started.connect(_on_device_flow_started)
++	auth_client.auth_completed.connect(_on_auth_completed)
++	auth_client.auth_failed.connect(_on_auth_error)
+ 
+-func _on_connection_success() -> void:
+-	$Connect.hide()
+-	$Players.show()
++	gamira_client.ticket_created.connect(_on_ticket_created)
++	gamira_client.match_found.connect(_on_match_found)
++	gamira_client.ticket_cancelled.connect(_on_ticket_cancelled)
++	gamira_client.error_occurred.connect(_on_gamira_error)
+ 
++	if auth_client.load_stored_tokens():
++		_enter_lobby()
++	else:
++		_set_state(State.LOGIN)
++
++func _set_state(s: State) -> void:
++	_state = s
++	$Login.visible = (s == State.LOGIN)
++	$AuthPending.visible = (s == State.AUTH_PENDING)
++	$Lobby.visible = (s == State.LOBBY)
++	$Matchmaking.visible = (s == State.MATCHMAKING)
++
++func _enter_lobby() -> void:
++	$Lobby/NameLabel.text = auth_client.get_display_name()
++	$Lobby/FindMatch.disabled = false
++	$Lobby/ErrorLabel.text = ""
++	_set_state(State.LOBBY)
++
++# ---- Login state ----
++
++func _on_github_pressed() -> void:
++	$Login/ErrorLabel.text = ""
++	$Login/GitHub.disabled = true
++	auth_client.begin_device_flow()
++
++func _on_device_flow_started(user_code: String, verification_uri: String, _interval: int) -> void:
++	$AuthPending/CodeLabel.text = user_code
++	$AuthPending/CopyCode.set_meta("code", user_code)
++	$AuthPending/OpenBrowser.set_meta("uri", verification_uri)
++	$AuthPending/StatusLabel.text = "Waiting for GitHub…"
++	_set_state(State.AUTH_PENDING)
++
++func _on_auth_error(reason: String) -> void:
++	auth_client.cancel_device_flow()
++	$Login/GitHub.disabled = false
++	$Login/ErrorLabel.text = reason
++	_set_state(State.LOGIN)
++
++# ---- AuthPending state ----
++
++func _on_copy_code_pressed() -> void:
++	DisplayServer.clipboard_set($AuthPending/CopyCode.get_meta("code", ""))
++	$AuthPending/CopyCode.text = "Copied!"
++	get_tree().create_timer(1.5).timeout.connect(func(): $AuthPending/CopyCode.text = "Copy Code")
++
++func _on_open_browser_pressed() -> void:
++	OS.shell_open($AuthPending/OpenBrowser.get_meta("uri", ""))
++
++func _on_cancel_auth_pressed() -> void:
++	auth_client.cancel_device_flow()
++	$Login/GitHub.disabled = false
++	_set_state(State.LOGIN)
++
++func _on_auth_completed(_gamira_token: String, display_name: String) -> void:
++	gamestate.player_name = display_name
++	_enter_lobby()
++
++# ---- Lobby state ----
++
++func _on_find_match_pressed() -> void:
++	$Lobby/FindMatch.disabled = true
++	$Lobby/ErrorLabel.text = ""
++	gamira_client.create_ticket(auth_client.get_gamira_token())
++
++func _on_ticket_created(_ticket_id: String) -> void:
++	_set_state(State.MATCHMAKING)
++	$Matchmaking/StatusLabel.text = "Searching for opponent…"
++
++func _on_logout_pressed() -> void:
++	auth_client.clear_stored_tokens()
++	$Login/GitHub.disabled = false
++	_set_state(State.LOGIN)
++
++# ---- Matchmaking state ----
++
++func _on_cancel_match_pressed() -> void:
++	gamira_client.cancel_ticket()
++
++func _on_ticket_cancelled() -> void:
++	_enter_lobby()
++
++func _on_match_found(connection: Dictionary) -> void:
++	$Matchmaking/StatusLabel.text = "Match found! Connecting…"
++	var ip: String = connection.get("ip", "127.0.0.1")
++	var port: int = int(connection.get("port", gamestate.DEFAULT_PORT))
++
++	# Optional NAT traversal. Only when the launcher enabled it and the session
++	# advertises ice_servers; otherwise this is skipped entirely and the connection
++	# below is the same direct one as before. A tunnel that fails to come up also
++	# falls through to the direct address rather than failing the join.
++	if _ice.is_available(connection):
++		$Matchmaking/StatusLabel.text = "Match found! Opening tunnel…"
++		var local: Dictionary = await _ice.open(
++			gamira_client.get_session_id(),
++			gamira_client.get_gamira_token(),
++			gamira_client.get_api_base())
++		if not local.is_empty():
++			ip = local["ip"]
++			port = int(local["port"])
++
++	gamestate.join_game_port(ip, port, auth_client.get_display_name())
++
++func _on_connection_succeeded() -> void:
++	$Matchmaking/StatusLabel.text = "Connected — waiting for players…"
++
++# ---- Shared handlers ----
++
++func _on_gamira_error(reason: String) -> void:
++	$Lobby/ErrorLabel.text = reason
++	_enter_lobby()
+ 
+ func _on_connection_failed() -> void:
+-	$Connect/Host.disabled = false
+-	$Connect/Join.disabled = false
+-	$Connect/ErrorLabel.set_text("Connection failed.")
+-
++	_ice.close()
++	$Lobby/ErrorLabel.text = "Connection to game server failed."
++	_enter_lobby()
+ 
+ func _on_game_ended() -> void:
++	# The tunnel exists for one connection; leaving it running would hold a relay
++	# allocation (and a proxy process) after the player is back in the lobby.
++	_ice.close()
+ 	show()
+-	$Connect.show()
+-	$Players.hide()
+-	$Connect/Host.disabled = false
+-	$Connect/Join.disabled = false
+-
++	_enter_lobby()
+ 
+ func _on_game_error(errtxt: String) -> void:
+ 	$ErrorDialog.dialog_text = errtxt
+ 	$ErrorDialog.popup_centered()
+-	$Connect/Host.disabled = false
+-	$Connect/Join.disabled = false
+-
+-
+-func refresh_lobby() -> void:
+-	var players := gamestate.get_player_list()
+-	players.sort()
+-	$Players/List.clear()
+-	$Players/List.add_item(gamestate.player_name + " (you)")
+-	for p: String in players:
+-		$Players/List.add_item(p)
+-
+-	$Players/Start.disabled = not multiplayer.is_server()
+-
+-
+-func _on_start_pressed() -> void:
+-	gamestate.begin_game()
+-
+-
+-func _on_find_public_ip_pressed() -> void:
+-	OS.shell_open("https://icanhazip.com/")
++	_enter_lobby()
+diff --git a/multiplayer-bomber/project/lobby.tscn b/multiplayer-bomber/project/lobby.tscn
+index d78941bccad751c72fc24b328b505163f6736419..ad970822ac0647977d56634a36c25109257fe85a 100644
+--- a/multiplayer-bomber/project/lobby.tscn
++++ b/multiplayer-bomber/project/lobby.tscn
+@@ -9,11 +9,49 @@ anchor_right = 1.0
+ anchor_bottom = 1.0
+ grow_horizontal = 2
+ grow_vertical = 2
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+ script = ExtResource("1")
+ 
+-[node name="Players" type="Panel" parent="." unique_id=1013754916]
++[node name="Login" type="Panel" parent="."]
++layout_mode = 1
++anchors_preset = 8
++anchor_left = 0.5
++anchor_top = 0.5
++anchor_right = 0.5
++anchor_bottom = 0.5
++offset_left = -150.0
++offset_top = -70.0
++offset_right = 150.0
++offset_bottom = 70.0
++grow_horizontal = 2
++grow_vertical = 2
++
++[node name="TitleLabel" type="Label" parent="Login"]
++layout_mode = 0
++offset_left = 14.0
++offset_top = 12.0
++offset_right = 286.0
++offset_bottom = 34.0
++text = "Multiplayer Bomber"
++horizontal_alignment = 1
++
++[node name="GitHub" type="Button" parent="Login"]
++layout_mode = 0
++offset_left = 55.0
++offset_top = 46.0
++offset_right = 245.0
++offset_bottom = 76.0
++text = "Login with GitHub"
++
++[node name="ErrorLabel" type="Label" parent="Login"]
++layout_mode = 0
++offset_left = 14.0
++offset_top = 90.0
++offset_right = 286.0
++offset_bottom = 112.0
++theme_override_colors/font_color = Color(0.820312, 0.291595, 0.291595, 1)
++horizontal_alignment = 1
++
++[node name="AuthPending" type="Panel" parent="."]
+ visible = false
+ layout_mode = 1
+ anchors_preset = 8
+@@ -21,154 +59,148 @@ anchor_left = 0.5
+ anchor_top = 0.5
+ anchor_right = 0.5
+ anchor_bottom = 0.5
+-offset_left = -126.0
+-offset_top = -177.5
+-offset_right = 126.0
+-offset_bottom = 177.5
++offset_left = -175.0
++offset_top = -115.0
++offset_right = 175.0
++offset_bottom = 115.0
+ grow_horizontal = 2
+ grow_vertical = 2
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+ 
+-[node name="Label" type="Label" parent="Players" unique_id=637272658]
++[node name="InstructLabel" type="Label" parent="AuthPending"]
++layout_mode = 0
++offset_left = 14.0
++offset_top = 12.0
++offset_right = 336.0
++offset_bottom = 34.0
++text = "Complete login in your browser:"
++horizontal_alignment = 1
++
++[node name="CodeLabel" type="Label" parent="AuthPending"]
+ layout_mode = 0
+-offset_left = 26.0
+-offset_top = 7.0
+-offset_right = 229.0
+-offset_bottom = 30.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 0
+-text = "Awaiting Players..."
++offset_left = 14.0
++offset_top = 44.0
++offset_right = 336.0
++offset_bottom = 68.0
++theme_override_font_sizes/font_size = 20
+ horizontal_alignment = 1
+ 
+-[node name="Start" type="Button" parent="Players" unique_id=1342955133]
++[node name="CopyCode" type="Button" parent="AuthPending"]
+ layout_mode = 0
+-offset_left = 68.0
+-offset_top = 307.0
+-offset_right = 193.0
+-offset_bottom = 336.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-text = "START!"
+-
+-[node name="List" type="ItemList" parent="Players" unique_id=392983837]
++offset_left = 118.0
++offset_top = 76.0
++offset_right = 232.0
++offset_bottom = 100.0
++text = "Copy Code"
++
++[node name="OpenBrowser" type="Button" parent="AuthPending"]
+ layout_mode = 0
+-offset_left = 25.0
+-offset_top = 37.0
+-offset_right = 229.0
+-offset_bottom = 296.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-
+-[node name="PortForward" type="Label" parent="Players" unique_id=43167564]
++offset_left = 68.0
++offset_top = 108.0
++offset_right = 282.0
++offset_bottom = 138.0
++text = "Open Browser"
++
++[node name="StatusLabel" type="Label" parent="AuthPending"]
+ layout_mode = 0
+-offset_left = -124.0
+-offset_top = 375.0
+-offset_right = 128.0
+-offset_bottom = 429.0
+-theme_override_constants/line_spacing = 6
+-text = "If you want non-LAN clients to connect,
+-make sure the port 10567 in UDP
+-is forwarded on your router."
+-
+-[node name="FindPublicIP" type="LinkButton" parent="Players" unique_id=835172016]
++offset_left = 14.0
++offset_top = 150.0
++offset_right = 336.0
++offset_bottom = 172.0
++horizontal_alignment = 1
++
++[node name="CancelAuth" type="Button" parent="AuthPending"]
+ layout_mode = 0
+-offset_left = 200.0
+-offset_top = 409.5
+-offset_right = 408.0
+-offset_bottom = 432.5
+-text = "Find your public IP address"
++offset_left = 118.0
++offset_top = 184.0
++offset_right = 232.0
++offset_bottom = 210.0
++text = "Cancel"
+ 
+-[node name="Connect" type="Panel" parent="." unique_id=1250458413]
++[node name="Lobby" type="Panel" parent="."]
++visible = false
+ layout_mode = 1
+ anchors_preset = 8
+ anchor_left = 0.5
+ anchor_top = 0.5
+ anchor_right = 0.5
+ anchor_bottom = 0.5
+-offset_left = -138.5
+-offset_top = -83.5
+-offset_right = 138.5
+-offset_bottom = 83.5
++offset_left = -150.0
++offset_top = -80.0
++offset_right = 150.0
++offset_bottom = 80.0
+ grow_horizontal = 2
+ grow_vertical = 2
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+ 
+-[node name="NameLabel" type="Label" parent="Connect" unique_id=2019522305]
++[node name="NameLabel" type="Label" parent="Lobby"]
+ layout_mode = 0
+ offset_left = 14.0
+-offset_top = 11.0
+-offset_right = 56.0
+-offset_bottom = 25.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 0
+-text = "Name:"
+-
+-[node name="Name" type="LineEdit" parent="Connect" unique_id=980379627]
+-layout_mode = 0
+-offset_left = 17.0
+-offset_top = 38.0
+-offset_right = 173.0
+-offset_bottom = 69.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-text = "The Warrior"
+-
+-[node name="IPLabel" type="Label" parent="Connect" unique_id=1567189526]
++offset_top = 12.0
++offset_right = 286.0
++offset_bottom = 34.0
++horizontal_alignment = 1
++
++[node name="FindMatch" type="Button" parent="Lobby"]
+ layout_mode = 0
+-offset_left = 15.0
+-offset_top = 74.0
+-offset_right = 57.0
+-offset_bottom = 97.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 0
+-theme_override_font_sizes/font_size = 16
+-text = "IP:"
+-
+-[node name="IPAddress" type="LineEdit" parent="Connect" unique_id=355729617]
++offset_left = 55.0
++offset_top = 46.0
++offset_right = 245.0
++offset_bottom = 76.0
++text = "Find Match"
++
++[node name="Logout" type="Button" parent="Lobby"]
+ layout_mode = 0
+-offset_left = 17.0
+-offset_top = 102.0
+-offset_right = 173.0
+-offset_bottom = 133.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-text = "127.0.0.1"
+-
+-[node name="Host" type="Button" parent="Connect" unique_id=884396924]
++offset_left = 90.0
++offset_top = 90.0
++offset_right = 210.0
++offset_bottom = 114.0
++text = "Logout"
++
++[node name="ErrorLabel" type="Label" parent="Lobby"]
+ layout_mode = 0
+-offset_left = 181.0
+-offset_top = 38.0
+-offset_right = 246.0
+-offset_bottom = 69.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-text = "Host"
+-
+-[node name="Join" type="Button" parent="Connect" unique_id=1609824487]
++offset_left = 14.0
++offset_top = 128.0
++offset_right = 286.0
++offset_bottom = 150.0
++theme_override_colors/font_color = Color(0.820312, 0.291595, 0.291595, 1)
++horizontal_alignment = 1
++
++[node name="Matchmaking" type="Panel" parent="."]
++visible = false
++layout_mode = 1
++anchors_preset = 8
++anchor_left = 0.5
++anchor_top = 0.5
++anchor_right = 0.5
++anchor_bottom = 0.5
++offset_left = -150.0
++offset_top = -50.0
++offset_right = 150.0
++offset_bottom = 50.0
++grow_horizontal = 2
++grow_vertical = 2
++
++[node name="StatusLabel" type="Label" parent="Matchmaking"]
+ layout_mode = 0
+-offset_left = 181.0
+-offset_top = 102.0
+-offset_right = 246.0
+-offset_bottom = 133.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 2
+-text = "Join"
+-
+-[node name="ErrorLabel" type="Label" parent="Connect" unique_id=2060731581]
++offset_left = 14.0
++offset_top = 12.0
++offset_right = 286.0
++offset_bottom = 34.0
++horizontal_alignment = 1
++
++[node name="CancelMatch" type="Button" parent="Matchmaking"]
+ layout_mode = 0
+-offset_left = 15.0
+-offset_top = 138.0
+-offset_right = 257.0
+-offset_bottom = 161.0
+-size_flags_horizontal = 2
+-size_flags_vertical = 0
+-theme_override_colors/font_color = Color(0.820312, 0.291595, 0.291595, 1)
++offset_left = 90.0
++offset_top = 46.0
++offset_right = 210.0
++offset_bottom = 70.0
++text = "Cancel"
+ 
+ [node name="ErrorDialog" type="AcceptDialog" parent="." unique_id=142008537]
+ 
+-[connection signal="pressed" from="Players/Start" to="." method="_on_start_pressed"]
+-[connection signal="pressed" from="Players/FindPublicIP" to="." method="_on_find_public_ip_pressed"]
+-[connection signal="pressed" from="Connect/Host" to="." method="_on_host_pressed"]
+-[connection signal="pressed" from="Connect/Join" to="." method="_on_join_pressed"]
++[connection signal="pressed" from="Login/GitHub" to="." method="_on_github_pressed"]
++[connection signal="pressed" from="AuthPending/CopyCode" to="." method="_on_copy_code_pressed"]
++[connection signal="pressed" from="AuthPending/OpenBrowser" to="." method="_on_open_browser_pressed"]
++[connection signal="pressed" from="AuthPending/CancelAuth" to="." method="_on_cancel_auth_pressed"]
++[connection signal="pressed" from="Lobby/FindMatch" to="." method="_on_find_match_pressed"]
++[connection signal="pressed" from="Lobby/Logout" to="." method="_on_logout_pressed"]
++[connection signal="pressed" from="Matchmaking/CancelMatch" to="." method="_on_cancel_match_pressed"]
+diff --git a/multiplayer-bomber/project/montserrat.otf.import b/multiplayer-bomber/project/montserrat.otf.import
+index 24b65875e3a62e7b6682df7a155c37de6a2f9456..2e56efc6c4087f77f5001a46a7985c870ba0c64a 100644
+--- a/multiplayer-bomber/project/montserrat.otf.import
++++ b/multiplayer-bomber/project/montserrat.otf.import
+@@ -21,7 +21,6 @@ msdf_pixel_range=8
+ msdf_size=48
+ allow_system_fallback=true
+ force_autohinter=false
+-modulate_color_glyphs=false
+ hinting=1
+ subpixel_positioning=4
+ keep_rounding_remainders=true
+diff --git a/multiplayer-bomber/project/player.gd b/multiplayer-bomber/project/player.gd
+index 7e452d0658cb7af5b9f67841ca0d90be7d48c97a..ef7eab1089315b36f22457353451958dc1a4c2b1 100644
+--- a/multiplayer-bomber/project/player.gd
++++ b/multiplayer-bomber/project/player.gd
+@@ -25,7 +25,10 @@ func _ready() -> void:
+ func _physics_process(delta: float) -> void:
+ 	if multiplayer.multiplayer_peer == null or str(multiplayer.get_unique_id()) == str(name):
+ 		# The client which this player represent will update the controls state, and notify it to everyone.
++		var was_bombing: bool = inputs.bombing
+ 		inputs.update()
++		if inputs.bombing and not was_bombing:
++			pass
+ 
+ 	if multiplayer.multiplayer_peer == null or is_multiplayer_authority():
+ 		# The server updates the position that will be notified to the clients.
+@@ -34,7 +37,7 @@ func _physics_process(delta: float) -> void:
+ 		last_bomb_time += delta
+ 		if not stunned and is_multiplayer_authority() and inputs.bombing and last_bomb_time >= BOMB_RATE:
+ 			last_bomb_time = 0.0
+-			$"../../BombSpawner".spawn([position, str(name).to_int()])
++			gamestate._spawn_bomb_rpc.rpc(position, str(name).to_int())
+ 	else:
+ 		# The client simply updates the position to the last known one.
+ 		position = synced_position
+@@ -61,7 +64,8 @@ func _physics_process(delta: float) -> void:
+ 
+ 	if new_anim != current_anim:
+ 		current_anim = new_anim
+-		$anim.play(current_anim)
++		if not multiplayer.is_server():
++			$anim.play(current_anim)
+ 
+ 
+ @rpc("call_local")
+@@ -76,6 +80,7 @@ func set_player_name(value: String) -> void:
+ func exploded(_by_who: int) -> void:
+ 	if stunned:
+ 		return
+-
+ 	stunned = true
+-	$anim.play(&"stunned")
++	if not multiplayer.is_server():
++		$anim.play(&"stunned")
++	get_tree().create_timer(3.0).timeout.connect(func(): stunned = false)
+diff --git a/multiplayer-bomber/project/project.godot b/multiplayer-bomber/project/project.godot
+index cc8720ea25c993e93035775aa533c39e8221a248..96e13b68433fbfce32ecc4e1c42fbe3300ab0dad 100644
+--- a/multiplayer-bomber/project/project.godot
++++ b/multiplayer-bomber/project/project.godot
+@@ -11,9 +11,7 @@ config_version=5
+ [application]
+ 
+ config/name="Multiplayer Bomber"
+-config/description="A multiplayer implementation of the classic bomberman game.
+-One of the players should press \"Host\", while the other
+-should type in his address and press \"Play\"."
++config/description="Multiplayer Bomber client with Gamira matchmaking and configurable authentication."
+ config/tags=PackedStringArray("2d", "demo", "network", "official")
+ run/main_scene="res://lobby.tscn"
+ config/features=PackedStringArray("4.6")
+@@ -22,6 +20,8 @@ config/icon="res://icon.webp"
+ [autoload]
+ 
+ gamestate="*res://gamestate.gd"
++auth_client="*res://auth_client.gd"
++gamira_client="*res://gamira_client.gd"
+ 
+ [debug]
+ 
+diff --git a/multiplayer-bomber/project/rock.gd b/multiplayer-bomber/project/rock.gd
+index 6ae1805feb58bbae708d652fa42327d77eb0e3a2..03901362d188eb7de337f70e1ba8002bcc00e172 100644
+--- a/multiplayer-bomber/project/rock.gd
++++ b/multiplayer-bomber/project/rock.gd
+@@ -3,4 +3,4 @@ extends CharacterBody2D
+ @rpc("call_local")
+ func exploded(by_who: int) -> void:
+ 	$"../../Score".increase_score(by_who)
+-	$"AnimationPlayer".play(&"explode")
++	queue_free()
+diff --git a/multiplayer-bomber/project/rock_bit.png.import b/multiplayer-bomber/project/rock_bit.png.import
+index 9e8054c1ebe4cb491b07d8528235ccacaca968c2..b0f8d7e9bcadf1e8dca6554422d780921f4f06a6 100644
+--- a/multiplayer-bomber/project/rock_bit.png.import
++++ b/multiplayer-bomber/project/rock_bit.png.import
+@@ -18,8 +18,6 @@ dest_files=["res://.godot/imported/rock_bit.png-cd30ec3dce7edf848ee632b29d4d0c95
+ compress/mode=0
+ compress/high_quality=false
+ compress/lossy_quality=0.7
+-compress/uastc_level=0
+-compress/rdo_quality_loss=0.0
+ compress/hdr_compression=1
+ compress/normal_map=0
+ compress/channel_pack=0
+@@ -27,10 +25,6 @@ mipmaps/generate=false
+ mipmaps/limit=-1
+ roughness/mode=0
+ roughness/src_normal=""
+-process/channel_remap/red=0
+-process/channel_remap/green=1
+-process/channel_remap/blue=2
+-process/channel_remap/alpha=3
+ process/fix_alpha_border=true
+ process/premult_alpha=false
+ process/normal_map_invert_y=false

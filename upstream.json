@@ -1,0 +1,207 @@
+{
+  "format": 1,
+  "scope": "client-only",
+  "demo": "godot",
+  "url": "https://github.com/godotengine/godot-demo-projects.git",
+  "commit": "b4eff8de9d7ba5a4f1a2dea8bae60f28816b7eea",
+  "prefix": "multiplayer-bomber/project",
+  "subdir": "networking/multiplayer_bomber",
+  "patch_sha256": "602899a0eaf69d79b35062fc41469c4880e1c21b9d8efc30b277f1f3be81eb56",
+  "verified": true,
+  "sanitized": [],
+  "removed": [],
+  "files": {
+    "multiplayer-bomber/.gitignore": {
+      "sha256": "18a3bac02009b78aac35b0392239ad3de0c8e24c340a2eca3d7797f2b958e5e5",
+      "executable": false
+    },
+    "multiplayer-bomber/LICENSE": {
+      "sha256": "05e66a73109a7750670a7e926906338f90e7386ff34acf5bef9f98e9953cc8e8",
+      "executable": false
+    },
+    "multiplayer-bomber/README.md": {
+      "sha256": "d2cea93f1887cf02a9ed05bc54787fc8941a5916f3b53f36f306f0540cc251fd",
+      "executable": false
+    },
+    "multiplayer-bomber/project/README.md": {
+      "sha256": "94e221443bbccc27ef6a1fb196c021cc1dc6f72bac83b8071562a3787007819e",
+      "executable": false
+    },
+    "multiplayer-bomber/project/auth_client.gd": {
+      "sha256": "c0e08df09b6fe1047e7eae7a6b8382971a252db404b42049a1c729685c6c0483",
+      "executable": false
+    },
+    "multiplayer-bomber/project/bomb.gd": {
+      "sha256": "1b9f3c4bd362a38f7521dd6a389cb47b24c035f9620ce3a3cb2344ddeed5c1bf",
+      "executable": false
+    },
+    "multiplayer-bomber/project/bomb.gd.uid": {
+      "sha256": "4df82818da01377839f54693959e44b02e59861794476520c3883145730d2261",
+      "executable": false
+    },
+    "multiplayer-bomber/project/bomb.tscn": {
+      "sha256": "f65f7c963b4b74db074c920d88be1a804b5b7608f905c44a28b32ff5d0f3dd99",
+      "executable": false
+    },
+    "multiplayer-bomber/project/bomb_spawner.gd": {
+      "sha256": "76945ceb70dd14ca90910df85a963ba963a2008e07d09aeb806c5de9c4ef6d02",
+      "executable": false
+    },
+    "multiplayer-bomber/project/bomb_spawner.gd.uid": {
+      "sha256": "81c6f519807a69c5c6ca7e3b6d58762a8953516c064b514877c6dff89cb76747",
+      "executable": false
+    },
+    "multiplayer-bomber/project/brickfloor.png": {
+      "sha256": "bc0572bacf7c60dc0c93f1444ad026ff58cf81029364f42b3bf165ca9815eaf6",
+      "executable": false
+    },
+    "multiplayer-bomber/project/brickfloor.png.import": {
+      "sha256": "cd6ed5c8beb7635a9c9392c99c78d5646273121564e0ed06ac5b55c059129b67",
+      "executable": false
+    },
+    "multiplayer-bomber/project/charwalk.png": {
+      "sha256": "d6037d0785b561c9ea9b59a4fa5b005b9d9a594a3a3e25589129bcd3e1e5566d",
+      "executable": false
+    },
+    "multiplayer-bomber/project/charwalk.png.import": {
+      "sha256": "99a3ac0f68797843a9e3409f77762d9989a4b11999f6f861f44c6148844b4c8f",
+      "executable": false
+    },
+    "multiplayer-bomber/project/client.cfg": {
+      "sha256": "0e1a4324f05f75907edc81d8bbefb912a908c72e7a1d2121866459207e11aa24",
+      "executable": false
+    },
+    "multiplayer-bomber/project/client_config.gd": {
+      "sha256": "42a16208d4049b354920fae5ae8f03cd5623df2a6188493b273923d9ecb9dd9d",
+      "executable": false
+    },
+    "multiplayer-bomber/project/explosion.png": {
+      "sha256": "9e33b8f18c5443f725e279365f45ed2d11d8482c60677dd2119caf86a81c9d95",
+      "executable": false
+    },
+    "multiplayer-bomber/project/explosion.png.import": {
+      "sha256": "4e351fe5e178c68126f7cbd5cbc182524aa388e10e9fa1abbb2ede95822be929",
+      "executable": false
+    },
+    "multiplayer-bomber/project/gamestate.gd": {
+      "sha256": "bb0be0d94fef38081d0e23b1a2c4b35adb35ca2b923d26545d05b28cb455b28a",
+      "executable": false
+    },
+    "multiplayer-bomber/project/gamestate.gd.uid": {
+      "sha256": "6faa9f4fbcf257245e1ce6453e0c2e6020fbe5799aaa818e61234ff8bfec5470",
+      "executable": false
+    },
+    "multiplayer-bomber/project/gamira_client.gd": {
+      "sha256": "53265415629c42ec86a6e46e80de4a3c82efb3199e7dafdb499e7d03d839e860",
+      "executable": false
+    },
+    "multiplayer-bomber/project/ice_tunnel.gd": {
+      "sha256": "a702e21f0728e176c9f6e8cabdfe8119c34ef36caaef1e9af3e911c3d467d41f",
+      "executable": false
+    },
+    "multiplayer-bomber/project/icon.webp": {
+      "sha256": "f32abf85126d7b7fcb0b12872e727c8ee0c4e54e1142c99880ef5bcbf941e744",
+      "executable": false
+    },
+    "multiplayer-bomber/project/icon.webp.import": {
+      "sha256": "c7afcd9d9efbcb4a167a89213e8e3eab47ac8fee00a1ec18511bc9fef0fb3e5d",
+      "executable": false
+    },
+    "multiplayer-bomber/project/lobby.gd": {
+      "sha256": "2349a632afa9c19c6e34cbe4f5da43f0916764964302aaf7e30065b9e6b0a134",
+      "executable": false
+    },
+    "multiplayer-bomber/project/lobby.gd.uid": {
+      "sha256": "82c133b7ba2d6fa5dc936d99b0e91663648e4384bc27017db65a07d1a795b2a5",
+      "executable": false
+    },
+    "multiplayer-bomber/project/lobby.tscn": {
+      "sha256": "334c7769044175193f9b586c7f9970311862ebf722cd331bca00f5f713acf8a9",
+      "executable": false
+    },
+    "multiplayer-bomber/project/montserrat.otf": {
+      "sha256": "17ae49f737f0b36ce87dd587a7fda35a7d95eb330d175f27e70062905894b486",
+      "executable": false
+    },
+    "multiplayer-bomber/project/montserrat.otf.import": {
+      "sha256": "ee2174b57c4db789b7a823348431ba2a7a147f7e2d13c6e9b4439c39f91391da",
+      "executable": false
+    },
+    "multiplayer-bomber/project/player.gd": {
+      "sha256": "30e6ad42b56676b9df3aef025d1f28f4ff957f904eea7dbfb375a778fdff6bc7",
+      "executable": false
+    },
+    "multiplayer-bomber/project/player.gd.uid": {
+      "sha256": "25c9e2cf1fe7ef10d96efc670a118e8a7a30a70e5e438a8df2f241ffefebcc5a",
+      "executable": false
+    },
+    "multiplayer-bomber/project/player.tscn": {
+      "sha256": "92899287207ac239de8e7e7e868a86d175967e4b3230a73e92230fa66f2e44f8",
+      "executable": false
+    },
+    "multiplayer-bomber/project/player_controls.gd": {
+      "sha256": "d832eee205e0dd31da6d31c30321a86731f157305403304458242d9c354fec27",
+      "executable": false
+    },
+    "multiplayer-bomber/project/player_controls.gd.uid": {
+      "sha256": "506f36db30c3d39e42465afba3019084bfb9ae1d158f864b416b5a35c3cdb245",
+      "executable": false
+    },
+    "multiplayer-bomber/project/project.godot": {
+      "sha256": "9d53ab0ab5a70c302c83313a17711b9e3289f8e2a0a2d4fb89222c4baee6f6c8",
+      "executable": false
+    },
+    "multiplayer-bomber/project/rock.gd": {
+      "sha256": "62b970e46295a555aebc72e6bb826ca9ee7cef5a0f634e9e000ebd7e6599965c",
+      "executable": false
+    },
+    "multiplayer-bomber/project/rock.gd.uid": {
+      "sha256": "b50f56aab7c96e0ddfd6bb320c849835c7f066bf924efe5229fb1fef56fa1a19",
+      "executable": false
+    },
+    "multiplayer-bomber/project/rock.tscn": {
+      "sha256": "437dd053fc8a19433dd358bd205b98710f5f82e2878045a45e7a01faf17a3d53",
+      "executable": false
+    },
+    "multiplayer-bomber/project/rock_bit.png": {
+      "sha256": "040e0c56db8ed317048948a80a37f156fd87ee5ad46ff97b695c9dd6c0e4c074",
+      "executable": false
+    },
+    "multiplayer-bomber/project/rock_bit.png.import": {
+      "sha256": "b35779655688e740e04187ead4755b077b7fc5d5a7cfc0e524596e069db5ecad",
+      "executable": false
+    },
+    "multiplayer-bomber/project/score.gd": {
+      "sha256": "6147bf323eee0c140aceda6ccffa6068dd39335a458028999cb43649bd43d662",
+      "executable": false
+    },
+    "multiplayer-bomber/project/score.gd.uid": {
+      "sha256": "33babfd7325e2fa77179bdf196948055803039ed2e672716a67aff01243a30cb",
+      "executable": false
+    },
+    "multiplayer-bomber/project/screenshots/.gdignore": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "executable": false
+    },
+    "multiplayer-bomber/project/screenshots/bomber.png": {
+      "sha256": "23b59808b1faed44ffdea7169f128141799aae0db2e5bee7b9cff32a3b7c2dee",
+      "executable": false
+    },
+    "multiplayer-bomber/project/tile_scene.tscn": {
+      "sha256": "67358c8fb052153a79111e2033ea90210f5156157783098b4202e8ef193322b7",
+      "executable": false
+    },
+    "multiplayer-bomber/project/tileset.tres": {
+      "sha256": "dc165ae3c82894b15e08e5c9744cd28b8b3b3f640c2ca18731ff8d615153933a",
+      "executable": false
+    },
+    "multiplayer-bomber/project/world.tscn": {
+      "sha256": "d5509cacaca248d5f9a5d9681bbdad9b552cb27bf0fa8077e51778db257e5c6d",
+      "executable": false
+    }
+  },
+  "client_config": {
+    "file": "multiplayer-bomber/project/client.cfg",
+    "format": "godot"
+  }
+}
